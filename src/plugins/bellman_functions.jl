@@ -763,6 +763,60 @@ function read_cuts_from_file(
     return
 end
 
+### Jiajun's block
+function read_compromise_cuts_from_files(
+    model::PolicyGraph{T},
+    filename::String,
+    total::Int64;
+    node_name_parser::Function = _node_name_parser,
+) where {T}
+    for i in 1:total
+        temp_name = join([filename, string(i), ".js"])
+        cuts = JSON.parsefile(temp_name, use_mmap = false)
+        for node_cuts in cuts
+            node_name = node_name_parser(T, node_cuts["node"])::T
+            node = model[node_name]
+            bf = node.bellman_function
+
+            # Delete exixt cuts
+            if length(bf.local_thetas) > 0
+                subproblem = JuMP.owner_model(bf.local_thetas[i].theta)
+                for cut in bf.local_thetas[i].cuts
+                    JuMP.delete(subproblem, cut.constraint_ref)
+                    cut.constraint_ref = nothing
+                    cut.non_dominated_count = 0
+                end
+                cnt = length(bf.local_thetas[i].cuts)
+                for idx in 1:cnt
+                    pop!(bf.local_thetas[i].cuts)
+                    pop!(bf.local_thetas[i].sampled_states)
+                end
+            end
+            
+            # Loop through and add the single-cuts.
+            for json_cut in node_cuts["single_cuts"]
+                has_state = haskey(json_cut, "state")
+                state = if has_state
+                    Dict(Symbol(k) => v for (k, v) in json_cut["state"])
+                else
+                    Dict(Symbol(k) => 0.0 for k in keys(json_cut["coefficients"]))
+                end
+                
+                _add_cut(
+                    bf.local_thetas[i],
+                    json_cut["intercept"],
+                    Dict(Symbol(k) => v for (k, v) in json_cut["coefficients"]),
+                    state,
+                    nothing,
+                    nothing;
+                    cut_selection = has_state,
+                )
+            end
+        end
+    end
+    return
+end
+#### Jiajun's block end
 """
     add_all_cuts(model::PolicyGraph)
 
