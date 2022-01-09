@@ -347,7 +347,7 @@ end
 An atom of a discrete random variable at the point of support `support` and
 associated probability `probability`.
 """
-struct Noise{T}
+mutable struct Noise{T}
     # The noise term.
     term::T
     # The probability of sampling the noise term.
@@ -385,7 +385,7 @@ mutable struct Node{T}
     subproblem::JuMP.Model
     # A vector of the child nodes.
     children::Vector{Noise{T}}
-    # A vector of the discrete stagewise-independent noise terms.
+    # A vector of the discrete stagewise-independent noise terms. (true distribution)
     noise_terms::Vector{Noise}
     # A function parameterize(model::JuMP.Model, noise) that modifies the JuMP
     # model based on the observation of the noise.
@@ -411,6 +411,10 @@ mutable struct Node{T}
     # An extension dictionary. This is a useful place for packages that extend
     # SDDP.jl to stash things.
     ext::Dict{Symbol,Any}
+
+    # ext[:cur_samples_num]::Int64, number of samples in current replications = number of iterations
+    # ext[:sampled_noise_terms]::Vector{Noise}, samples set
+    # ext[:compromise_samples_num]:: Int64, number of samples in each replicaiton of the compromise problem
 end
 
 function Base.show(io::IO, node::Node)

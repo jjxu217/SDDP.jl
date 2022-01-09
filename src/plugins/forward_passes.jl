@@ -37,6 +37,14 @@ function forward_pass(
     # Iterate down the scenario.
     for (depth, (node_index, noise)) in enumerate(scenario_path)
         node = model[node_index]
+
+        # Add the new scenario_path to the sampled set in each stage
+        node.ext[:cur_samples_num] = length(options.log) + 1 + options.initial_sample_size
+        if haskey(node.ext, :sampled_noise_terms) == false
+            node.ext[:sampled_noise_terms] = Noise[]
+        end
+        _add_to_sampled_set(node.ext[:sampled_noise_terms], noise, node.ext[:cur_samples_num])
+
         # Objective state interpolation.
         objective_state_vector = update_objective_state(
             node.objective_state,

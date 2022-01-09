@@ -117,6 +117,7 @@ function slave_update(model::PolicyGraph, result::IterationResult)
                 cut.obj_y,
                 cut.belief_y;
                 cut_selection = true,
+                sample_cnt = model[node_index].ext[:cur_samples_num] + 1,
             )
         end
     end

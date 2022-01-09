@@ -101,6 +101,7 @@ struct Options{T}
     duality_handler::AbstractDualityHandler
     # A callback called after the forward pass.
     forward_pass_callback::Any
+    initial_sample_size::Int
 
     # Internal function: users should never construct this themselves.
     function Options(
@@ -121,6 +122,8 @@ struct Options{T}
         forward_pass::AbstractForwardPass,
         duality_handler::AbstractDualityHandler,
         forward_pass_callback,
+        initial_sample_size,
+        
     ) where {T}
         return new{T}(
             initial_state,
@@ -142,6 +145,7 @@ struct Options{T}
             forward_pass,
             duality_handler,
             forward_pass_callback,
+            initial_sample_size,
         )
     end
 end
@@ -353,6 +357,30 @@ function _uninitialize_solver(model::PolicyGraph; throw_error::Bool)
     return
 end
 
+# Update the cut coefficient based on SDLP 
+function update_cut_coefficients(node::Node) 
+    # SINGLE_CUT is for each replication
+    if node.bellman_function.cut_type == SINGLE_CUT
+        global_theta = node.bellman_function.global_theta
+        for cut in global_theta.cuts
+            if cut.constraint_ref !== nothing
+                JuMP.set_normalized_coefficient(cut.constraint_ref, global_theta.theta, node.ext[:cur_samples_num] / cut.sample_cnt)
+            end
+        end
+
+    # MULTI_CUT is for the compromise policy
+    elseif node.bellman_function.cut_type == MULTI_CUT
+        for local_theta in node.bellman_function.local_thetas
+            for cut in local_theta.cuts
+                if cut.constraint_ref !== nothing
+                JuMP.set_normalized_coefficient(cut.constraint_ref, local_theta.theta, node.ext[:compromise_samples_num] / cut.sample_cnt)
+                end
+            end
+        end
+    end
+    return
+end
+
 # Internal function: solve the subproblem associated with node given the
 # incoming state variables state and realization of the stagewise-independent
 # noise term noise.
@@ -370,6 +398,7 @@ function solve_subproblem(
     # set the objective.
     set_incoming_state(node, state)
     parameterize(node, noise)
+    update_cut_coefficients(node)
     pre_optimize_ret = if node.pre_optimize_hook !== nothing
         node.pre_optimize_hook(
             model,
@@ -629,8 +658,8 @@ function solve_all_children(
             continue
         end
         child_node = model[child.term]
-        for noise in
-            sample_backward_noise_terms(backward_sampling_scheme, child_node)
+        for noise in child_node.ext[:sampled_noise_terms]
+            # sample_backward_noise_terms(backward_sampling_scheme, child_node)
             if length(scenario_path) == length_scenario_path
                 push!(scenario_path, (child.term, noise.term))
             else
@@ -719,7 +748,8 @@ function calculate_bound(
             continue
         end
         node = model[child.term]
-        for noise in node.noise_terms
+        # Jiajun: Lower bound calculatetion, update the noises set to the sampled_noise_terms
+        for noise in node.ext[:sampled_noise_terms]
             if node.objective_state !== nothing
                 update_objective_state(
                     node.objective_state,
@@ -925,6 +955,7 @@ function train(
     add_to_existing_cuts::Bool = false,
     duality_handler::AbstractDualityHandler = SDDP.ContinuousConicDuality(),
     forward_pass_callback::Function = (x) -> nothing,
+    initial_sample_size::Int = 0,
 )
     if !add_to_existing_cuts && model.most_recent_training_results !== nothing
         @warn("""
@@ -1034,6 +1065,7 @@ function train(
         forward_pass,
         duality_handler,
         forward_pass_callback,
+        initial_sample_size,
     )
     status = :not_solved
     try
@@ -1329,4 +1361,74 @@ function evaluate(
             c => value.(rule.node.subproblem[c]) for c in controls_to_record
         ),
     )
+end
+
+
+function compromise_null_train(
+    model::PolicyGraph;
+    sampling_scheme = SDDP.InSampleMonteCarlo(),
+    cut_type = SDDP.MULTI_CUT,
+    cut_deletion_minimum::Int = 1,
+)
+  
+    # Update the nodes with the selected cut type (SINGLE_CUT or MULTI_CUT)
+    # and the cut deletion minimum.
+    if cut_deletion_minimum < 0
+        cut_deletion_minimum = typemax(Int)
+    end
+    for (_, node) in model.nodes
+        node.bellman_function.cut_type = cut_type
+        node.bellman_function.global_theta.deletion_minimum =
+            cut_deletion_minimum
+        for oracle in node.bellman_function.local_thetas
+            oracle.deletion_minimum = cut_deletion_minimum
+        end
+    end
+
+
+    _initialize_solver(model; throw_error = false)
+
+    scenario_path, _ = sample_scenario(model, sampling_scheme)  
+    # Our initial incoming state.
+    incoming_state_value = copy(model.initial_root_state)
+    # A cumulator for the stage-objectives.
+    cumulative_value = 0.0
+    # Objective state interpolation.
+    objective_state_vector, N =
+        initialize_objective_state(model[scenario_path[1][1]])
+    objective_states = NTuple{N,Float64}[]
+    # Iterate down the scenario.
+    for (depth, (node_index, noise)) in enumerate(scenario_path)
+        node = model[node_index]
+
+        # Objective state interpolation.
+        objective_state_vector = update_objective_state(
+            node.objective_state,
+            objective_state_vector,
+            noise,
+        )
+        if objective_state_vector !== nothing
+            push!(objective_states, objective_state_vector)
+        end
+
+        # Solve the subproblem, note that `duality_handler = nothing`.  
+        subproblem_results = solve_subproblem(
+            model,
+            node,
+            incoming_state_value,
+            noise,
+            scenario_path[1:depth],
+            duality_handler = nothing,
+        )
+    
+        # Cumulate the stage_objective.
+        cumulative_value += subproblem_results.stage_objective
+        # Set the outgoing state value as the incoming state value for the next
+        # node.
+        incoming_state_value = copy(subproblem_results.state)
+        # Add the outgoing state variable to the list of states we have sampled
+        # on this forward pass.    
+    end  
+
+    return 
 end

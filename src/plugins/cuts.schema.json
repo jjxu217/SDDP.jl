@@ -42,7 +42,7 @@
     "definitions": {
         "Cut": {
             "type": "object",
-            "required": ["intercept", "coefficients"],
+            "required": ["intercept", "coefficients", "sample_cnt"],
             "properties": {
                 "intercept": {
                     "type": "number"
@@ -52,6 +52,9 @@
                 },
                 "state": {
                     "type": "object"
+                },
+                "sample_cnt":{
+                    "type": "number"
                 }
             }
         }

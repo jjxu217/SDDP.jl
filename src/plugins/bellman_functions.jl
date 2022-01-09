@@ -10,6 +10,7 @@ mutable struct Cut
     belief_y::Union{Nothing,Dict{T,Float64} where {T}}
     non_dominated_count::Int
     constraint_ref::Union{Nothing,JuMP.ConstraintRef}
+    sample_cnt::Int
 end
 
 mutable struct SampledState
@@ -91,15 +92,17 @@ function _add_cut(
     obj_y::Union{Nothing,NTuple{N,Float64}},
     belief_y::Union{Nothing,Dict{T,Float64}};
     cut_selection::Bool = true,
+    sample_cnt::Int = 0,
+    cur_samples_num::Int = 0,
 ) where {N,T}
     for (key, x) in xᵏ
         θᵏ -= πᵏ[key] * x
     end
     _dynamic_range_warning(θᵏ, πᵏ)
-    cut = Cut(θᵏ, πᵏ, obj_y, belief_y, 1, nothing)
+    cut = Cut(θᵏ, πᵏ, obj_y, belief_y, 1, nothing, sample_cnt)
     _add_cut_constraint_to_model(V, cut)
     if cut_selection
-        _cut_selection_update(V, cut, xᵏ)
+        _cut_selection_update(V, cut, xᵏ, cur_samples_num)
     end
     return
 end
@@ -132,12 +135,12 @@ end
 """
 Internal function: calculate the height of `cut` evaluated at `state`.
 """
-function _eval_height(cut::Cut, sampled_state::SampledState)
+function _eval_height(cut::Cut, sampled_state::SampledState, cur_samples_num::Int,)
     height = cut.intercept
     for (key, value) in cut.coefficients
         height += value * sampled_state.state[key]
     end
-    return height
+    return height * cut.sample_cnt / cur_samples_num
 end
 
 """
@@ -151,11 +154,12 @@ function _cut_selection_update(
     V::ConvexApproximation,
     cut::Cut,
     state::Dict{Symbol,Float64},
+    cur_samples_num::Int,
 )
     model = JuMP.owner_model(V.theta)
     is_minimization = JuMP.objective_sense(model) == MOI.MIN_SENSE
     sampled_state = SampledState(state, cut.obj_y, cut.belief_y, cut, NaN)
-    sampled_state.best_objective = _eval_height(cut, sampled_state)
+    sampled_state.best_objective = _eval_height(cut, sampled_state, cur_samples_num)
     # Loop through previously sampled states and compare the height of the most
     # recent cut against the current best. If this new cut is an improvement,
     # store this one instead.
@@ -164,7 +168,7 @@ function _cut_selection_update(
         if old_state.obj_y != cut.obj_y || old_state.belief_y != cut.belief_y
             continue
         end
-        height = _eval_height(cut, old_state)
+        height = _eval_height(cut, old_state, cur_samples_num)
         if _dominates(height, old_state.best_objective, is_minimization)
             old_state.dominating_cut.non_dominated_count -= 1
             cut.non_dominated_count += 1
@@ -187,7 +191,7 @@ function _cut_selection_update(
             # Only compute cut selection at same points in belief space.
             continue
         end
-        height = _eval_height(old_cut, sampled_state)
+        height = _eval_height(old_cut, sampled_state, cur_samples_num)
         if _dominates(height, sampled_state.best_objective, is_minimization)
             sampled_state.dominating_cut.non_dominated_count -= 1
             old_cut.non_dominated_count += 1
@@ -481,6 +485,8 @@ function _add_average_cut(
         outgoing_state,
         obj_y,
         belief_y,
+        sample_cnt=node.ext[:cur_samples_num],
+        cur_samples_num=node.ext[:cur_samples_num],
     )
     return (
         theta = θᵏ,
@@ -513,6 +519,8 @@ function _add_multi_cut(
             node.objective_state === nothing ? nothing :
             node.objective_state.state,
             node.belief_state === nothing ? nothing : node.belief_state.belief,
+            sample_cnt=node.ext[:cur_samples_num],
+            cur_samples_num=node.ext[:cur_samples_num],
         )
     end
     model = JuMP.owner_model(bellman_function.global_theta.theta)
@@ -555,7 +563,8 @@ function _add_locals_if_necessary(
     end
     global_theta = bellman_function.global_theta
     model = JuMP.owner_model(global_theta.theta)
-    local_thetas = @variable(model, [1:N])
+    local_thetas = @variable(model, local_thetas_variable[1:N])
+    @constraint(model, global_local_relation, sum(local_thetas) / N - global_theta.theta == 0)
     if JuMP.has_lower_bound(global_theta.theta)
         JuMP.set_lower_bound.(
             local_thetas,
@@ -618,6 +627,7 @@ function write_cuts_to_file(model::PolicyGraph{T}, filename::String) where {T}
                     "intercept" => intercept,
                     "coefficients" => copy(cut.coefficients),
                     "state" => copy(state.state),
+                    "sample_cnt" => cut.sample_cnt,
                 ),
             )
         end
@@ -634,6 +644,7 @@ function write_cuts_to_file(model::PolicyGraph{T}, filename::String) where {T}
                         "intercept" => intercept,
                         "coefficients" => copy(cut.coefficients),
                         "state" => copy(state.state),
+                        "sample_cnt" => cut.sample_cnt,
                     ),
                 )
             end
@@ -691,11 +702,13 @@ function read_cuts_from_file(
     model::PolicyGraph{T},
     filename::String;
     node_name_parser::Function = _node_name_parser,
+    compromise_samples_num::Int,
 ) where {T}
     cuts = JSON.parsefile(filename, use_mmap = false)
     for node_cuts in cuts
         node_name = node_name_parser(T, node_cuts["node"])::T
         node = model[node_name]
+        node.ext[:compromise_samples_num] = compromise_samples_num
         bf = node.bellman_function
         # Loop through and add the single-cuts.
         for json_cut in node_cuts["single_cuts"]
@@ -713,6 +726,8 @@ function read_cuts_from_file(
                 nothing,
                 nothing;
                 cut_selection = has_state,
+                sample_cnt=json_cut["sample_cnt"],
+                cur_samples_num=compromise_samples_num,
             )
         end
         # Loop through and add the multi-cuts. There are two parts:
@@ -742,6 +757,8 @@ function read_cuts_from_file(
                 nothing,
                 nothing;
                 cut_selection = has_state,
+                sample_cnt=json_cut["sample_cnt"],
+                cur_samples_num=compromise_samples_num,
             )
         end
         # Here is part (ii): adding the constraints that define the risk-set
@@ -767,16 +784,20 @@ end
 function read_compromise_cuts_from_files(
     model::PolicyGraph{T},
     filename::String,
-    total::Int64;
+    replication_num::Int;  #number of replications
+    replicaitons_sample_size::Vector{Int} = Int[],
     node_name_parser::Function = _node_name_parser,
+    compromise_samples_num::Int,
 ) where {T}
-    for i in 1:total
+    for i in 1:replication_num
         temp_name = join([filename, string(i), ".js"])
         cuts = JSON.parsefile(temp_name, use_mmap = false)
         for node_cuts in cuts
             node_name = node_name_parser(T, node_cuts["node"])::T
             node = model[node_name]
+            node.ext[:compromise_samples_num] = compromise_samples_num
             bf = node.bellman_function
+            _add_locals_if_necessary(node, bf, replication_num)
 
             # Delete exixt cuts
             if length(bf.local_thetas) > 0
@@ -786,11 +807,8 @@ function read_compromise_cuts_from_files(
                     cut.constraint_ref = nothing
                     cut.non_dominated_count = 0
                 end
-                cnt = length(bf.local_thetas[i].cuts)
-                for idx in 1:cnt
-                    pop!(bf.local_thetas[i].cuts)
-                    pop!(bf.local_thetas[i].sampled_states)
-                end
+                empty!(bf.local_thetas[i].cuts)
+                empty!(bf.local_thetas[i].sampled_states)
             end
             
             # Loop through and add the single-cuts.
@@ -810,6 +828,8 @@ function read_compromise_cuts_from_files(
                     nothing,
                     nothing;
                     cut_selection = has_state,
+                    sample_cnt=json_cut["sample_cnt"],
+                    cur_samples_num=compromise_samples_num,
                 )
             end
         end

@@ -434,3 +434,24 @@ function sample_scenario(
     end
     return s.scenarios[s.counter]
 end
+
+
+# ========================= Jiajun: add noise to sampled set ======================= #
+function _add_to_sampled_set(
+    sampled_noise_terms::Vector{Noise},
+    noise::T,
+    cur_samples_num::Int
+) where {T}
+    new_sample_flag = true
+    for cur_noise in sampled_noise_terms
+        cur_noise.probability *=  (cur_samples_num - 1) / cur_samples_num
+        if cur_noise.term == noise
+            new_sample_flag = false
+            cur_noise.probability += 1 / cur_samples_num 
+        end
+    end
+    if new_sample_flag == true
+        push!(sampled_noise_terms, Noise(noise, 1 / cur_samples_num ))
+    end
+    return
+end
