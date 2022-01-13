@@ -422,9 +422,9 @@ function solve_subproblem(
     end
     state = get_outgoing_state(node)
     stage_objective = stage_objective_value(node.stage_objective)
-    TimerOutputs.@timeit SDDP_TIMER "get_dual_solution" begin
-        objective, dual_values = get_dual_solution(node, duality_handler)
-    end
+    # TimerOutputs.@timeit SDDP_TIMER "get_dual_solution" begin
+    objective, dual_values = get_dual_solution(node, duality_handler)
+    # end
     if node.post_optimize_hook !== nothing
         node.post_optimize_hook(pre_optimize_ret)
     end
@@ -504,10 +504,10 @@ function backward_pass(
     objective_states::Vector{NTuple{N,Float64}},
     belief_states::Vector{Tuple{Int,Dict{T,Float64}}},
 ) where {T,NoiseType,N}
-    TimerOutputs.@timeit SDDP_TIMER "prepare_backward_pass" begin
-        restore_duality =
+    # TimerOutputs.@timeit SDDP_TIMER "prepare_backward_pass" begin
+    restore_duality =
             prepare_backward_pass(model, options.duality_handler, options)
-    end
+    # end
     # TODO(odow): improve storage type.
     cuts = Dict{T,Vector{Any}}(index => Any[] for index in keys(model.nodes))
     for index in length(scenario_path):-1:1
@@ -612,9 +612,9 @@ function backward_pass(
             end
         end
     end
-    TimerOutputs.@timeit SDDP_TIMER "prepare_backward_pass" begin
-        restore_duality()
-    end
+    # TimerOutputs.@timeit SDDP_TIMER "prepare_backward_pass" begin
+    restore_duality()
+    # end
     return cuts
 end
 
@@ -691,16 +691,16 @@ function solve_all_children(
                         noise.term,
                     )
                 end
-                TimerOutputs.@timeit SDDP_TIMER "solve_subproblem" begin
-                    subproblem_results = solve_subproblem(
-                        model,
-                        child_node,
-                        outgoing_state,
-                        noise.term,
-                        scenario_path,
-                        duality_handler = duality_handler,
-                    )
-                end
+                # TimerOutputs.@timeit SDDP_TIMER "solve_subproblem" begin
+                subproblem_results = solve_subproblem(
+                    model,
+                    child_node,
+                    outgoing_state,
+                    noise.term,
+                    scenario_path,
+                    duality_handler = duality_handler,
+                )
+                # end
                 push!(items.duals, subproblem_results.duals)
                 push!(items.supports, noise)
                 push!(items.nodes, child_node.index)
@@ -807,23 +807,23 @@ struct IterationResult{T}
 end
 
 function iteration(model::PolicyGraph{T}, options::Options) where {T}
-    TimerOutputs.@timeit SDDP_TIMER "forward_pass" begin
-        forward_trajectory = forward_pass(model, options, options.forward_pass)
-        options.forward_pass_callback(forward_trajectory)
-    end
-    TimerOutputs.@timeit SDDP_TIMER "backward_pass" begin
-        cuts = backward_pass(
-            model,
-            options,
-            forward_trajectory.scenario_path,
-            forward_trajectory.sampled_states,
-            forward_trajectory.objective_states,
-            forward_trajectory.belief_states,
-        )
-    end
-    TimerOutputs.@timeit SDDP_TIMER "calculate_bound" begin
-        bound = calculate_bound(model)
-    end
+    # TimerOutputs.@timeit SDDP_TIMER "forward_pass" begin
+    forward_trajectory = forward_pass(model, options, options.forward_pass)
+    options.forward_pass_callback(forward_trajectory)
+    # end
+    # TimerOutputs.@timeit SDDP_TIMER "backward_pass" begin
+    cuts = backward_pass(
+        model,
+        options,
+        forward_trajectory.scenario_path,
+        forward_trajectory.sampled_states,
+        forward_trajectory.objective_states,
+        forward_trajectory.belief_states,
+    )
+    # end
+    # TimerOutputs.@timeit SDDP_TIMER "calculate_bound" begin
+    bound = calculate_bound(model)
+    # end
     push!(
         options.log,
         Log(
@@ -1357,6 +1357,7 @@ function evaluate(
     return (
         stage_objective = ret.stage_objective,
         outgoing_state = ret.state,
+        objective = ret.objective,
         controls = Dict(
             c => value.(rule.node.subproblem[c]) for c in controls_to_record
         ),
@@ -1385,7 +1386,7 @@ function compromise_null_train(
         end
     end
 
-
+    
     _initialize_solver(model; throw_error = false)
 
     scenario_path, _ = sample_scenario(model, sampling_scheme)  

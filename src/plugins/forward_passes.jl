@@ -17,10 +17,10 @@ function forward_pass(
 ) where {T}
     # First up, sample a scenario. Note that if a cycle is detected, this will
     # return the cycle node as well.
-    TimerOutputs.@timeit SDDP_TIMER "sample_scenario" begin
-        scenario_path, terminated_due_to_cycle =
-            sample_scenario(model, options.sampling_scheme)
-    end
+    # TimerOutputs.@timeit SDDP_TIMER "sample_scenario" begin
+    scenario_path, terminated_due_to_cycle =
+        sample_scenario(model, options.sampling_scheme)
+    # end
     # Storage for the list of outgoing states that we visit on the forward pass.
     sampled_states = Dict{Symbol,Float64}[]
     # Storage for the belief states: partition index and the belief dictionary.
@@ -88,16 +88,16 @@ function forward_pass(
         end
         # ===== End: starting state for infinite horizon =====
         # Solve the subproblem, note that `duality_handler = nothing`.
-        TimerOutputs.@timeit SDDP_TIMER "solve_subproblem" begin
-            subproblem_results = solve_subproblem(
-                model,
-                node,
-                incoming_state_value,
-                noise,
-                scenario_path[1:depth],
-                duality_handler = nothing,
-            )
-        end
+        # TimerOutputs.@timeit SDDP_TIMER "solve_subproblem" begin
+        subproblem_results = solve_subproblem(
+            model,
+            node,
+            incoming_state_value,
+            noise,
+            scenario_path[1:depth],
+            duality_handler = nothing,
+        )
+        # end
         # Cumulate the stage_objective.
         cumulative_value += subproblem_results.stage_objective
         # Set the outgoing state value as the incoming state value for the next
