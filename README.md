@@ -2,7 +2,8 @@
 The repository contains the code for the compromise policy in multi-stage stochastic programming (MSLP).
 The compromise policy is constructed based on stochastic dual dynamic programming or online dual dynamic programming. The single replication SDDP code is based on the [SDDP.jl](https://github.com/odow/SDDP.jl) package by [Oscar Dowson](https://odow.github.io/). Thanks Oscar.
 
-This repository is a modification of the official SDDP.jl package. In order to run the compromise policy, please first download this package. 
+This repository is a developping version of the official SDDP.jl package, which is able to run multiple replications and construct the compromise policy.
+In order to run the compromise policy, please first download this package. 
 Then, 
 ```
 dev path_to_the_package
